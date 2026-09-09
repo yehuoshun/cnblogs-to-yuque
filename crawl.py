@@ -538,6 +538,7 @@ def main():
 
     state = load_state()
     processed = state.setdefault("processed", {})
+    author_cache = {}  # 作者目录 uuid 缓存，避免每篇重复 get_toc
     new_count = 0
     fail_count = 0
     cookie_ok = True
@@ -571,6 +572,9 @@ def main():
                     continue
                 empty_body_streak = 0
                 markdown = html_to_markdown(body_html)
+                if not markdown.strip():
+                    log(f"  正文转换后为空，跳过: {url}")
+                    continue
 
                 # 2. 图片下载+上传
                 if cookie and ctoken:
@@ -584,14 +588,13 @@ def main():
 
                 # 5. 建文档 + 挂目录
                 base_slug = hashlib.md5(url.encode()).hexdigest()[:12]
-                author_uuid = None
                 for idx, chunk in enumerate(chunks):
                     doc_title = title if len(chunks) == 1 else f"{title}-{idx + 1}"
                     doc_slug = base_slug if len(chunks) == 1 else f"{base_slug}-{idx + 1}"
                     doc_id = create_doc(book, doc_title, doc_slug, chunk, token)
-                    if author_uuid is None:
-                        author_uuid = get_or_create_author_node(book, author, token)
-                    attach_to_author(book, author_uuid, doc_id, token)
+                    if author not in author_cache:
+                        author_cache[author] = get_or_create_author_node(book, author, token)
+                    attach_to_author(book, author_cache[author], doc_id, token)
                     log(f"  ✅ 建文档 #{doc_id} 《{doc_title}》")
 
                 # 6. 标记已处理（全部成功才标记）
