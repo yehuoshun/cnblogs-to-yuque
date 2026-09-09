@@ -96,9 +96,15 @@ def notify_dingtalk(text):
         log("未配置 DINGTALK_WEBHOOK，跳过告警")
         return
     url = f"https://oapi.dingtalk.com/robot/send?access_token={token}"
+    # 钉钉机器人设了安全关键词「GitHub」，消息必须包含该词
+    content = text if "GitHub" in text else f"GitHub {text}"
     try:
-        requests.post(url, json={"msgtype": "text", "text": {"content": text}}, timeout=10)
-        log("钉钉告警已发送")
+        r = requests.post(url, json={"msgtype": "text", "text": {"content": content}}, timeout=10)
+        data = r.json()
+        if data.get("errcode") == 0:
+            log("钉钉告警已发送")
+        else:
+            log(f"钉钉告警失败: {data.get('errmsg')}")
     except Exception as e:
         log(f"钉钉告警发送失败: {e}")
 
