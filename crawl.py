@@ -13,7 +13,6 @@ GitHub Actions 定时运行：RSS 吐文章 URL → 抓详情页全文 → HTML�
   YUQUE_BOOK    目标知识库 namespace/ID（可选，覆盖 config）
 """
 
-import hashlib
 import json
 import os
 import re
@@ -459,10 +458,12 @@ def split_markdown(markdown, max_bytes):
 # ---------------------------------------------------------------------------
 # 语雀操作
 # ---------------------------------------------------------------------------
-def create_doc(book, title, slug, body, token):
-    """创建文档，返回 doc_id"""
-    r = api_request("POST", f"{API_BASE}/repos/{book}/docs", token=token,
-                    json_body={"title": title, "slug": slug, "body": body, "format": "markdown"})
+def create_doc(book, title, body, token, slug=None):
+    """创建文档，返回 doc_id（slug 不传则语雀自动生成）"""
+    payload = {"title": title, "body": body, "format": "markdown"}
+    if slug:
+        payload["slug"] = slug
+    r = api_request("POST", f"{API_BASE}/repos/{book}/docs", token=token, json_body=payload)
     if r is not None and r.status_code in (200, 201):
         return r.json()["data"]["id"]
     code = getattr(r, "status_code", "?")
@@ -600,12 +601,10 @@ def main():
                 # 4. 长文截断
                 chunks = split_markdown(markdown, max_bytes)
 
-                # 5. 建文档 + 挂目录
-                base_slug = hashlib.md5(url.encode()).hexdigest()[:12]
+                # 5. 建文档 + 挂目录（slug 交给语雀自动生成，去重靠 state.json URL key）
                 for idx, chunk in enumerate(chunks):
                     doc_title = title if len(chunks) == 1 else f"{title}-{idx + 1}"
-                    doc_slug = base_slug if len(chunks) == 1 else f"{base_slug}-{idx + 1}"
-                    doc_id = create_doc(book, doc_title, doc_slug, chunk, token)
+                    doc_id = create_doc(book, doc_title, chunk, token)
                     if author not in author_cache:
                         author_cache[author] = get_or_create_author_node(book, author, token)
                     attach_to_author(book, author_cache[author], doc_id, token)
