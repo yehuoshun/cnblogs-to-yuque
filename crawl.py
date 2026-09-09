@@ -531,9 +531,10 @@ def attach_to_author(book, author_uuid, doc_id, token):
 # ---------------------------------------------------------------------------
 def main():
     cfg = load_config()
-    token = env("YUQUE_TOKEN") or cfg.get("token", "")
-    cookie = env("YUQUE_COOKIE") or cfg.get("cookie", "")
-    ctoken = env("YUQUE_CTOKEN") or cfg.get("ctoken", "")
+    # 敏感信息只走环境变量（GitHub Secrets），绝不从 config.json 读，防误提交进 public 仓库泄露
+    token = env("YUQUE_TOKEN")
+    cookie = env("YUQUE_COOKIE")
+    ctoken = env("YUQUE_CTOKEN")
     book = env("YUQUE_BOOK") or cfg.get("book", "") or cfg.get("book_id", "")
     feeds = cfg.get("feeds", [])
     max_bytes = int(cfg.get("max_text_bytes", 200 * 1024))
