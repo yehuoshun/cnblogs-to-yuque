@@ -479,6 +479,7 @@ def main():
     new_count = 0
     fail_count = 0
     cookie_ok = True
+    empty_body_streak = 0
 
     for feed_cfg in feeds:
         try:
@@ -500,8 +501,13 @@ def main():
                 author = art["author"] or "未分类"
                 body_html = extract_body_html(r.text)
                 if not body_html:
-                    log(f"  正文为空，跳过: {url}")
+                    empty_body_streak += 1
+                    log(f"  正文为空，跳过: {url}（连续 {empty_body_streak} 篇）")
+                    if empty_body_streak >= 5:
+                        notify_dingtalk("[cnblogs-to-yuque] ⚠️ 连续 5 篇正文为空，疑似被博客园反爬，请检查")
+                        empty_body_streak = 0
                     continue
+                empty_body_streak = 0
                 markdown = html_to_markdown(body_html)
 
                 # 2. 图片下载+上传
