@@ -1,0 +1,41 @@
+name: cnblogs-crawl
+
+on:
+  schedule:
+    # UTC 19:00 = 北京时间凌晨 3:00
+    - cron: '0 19 * * *'
+  workflow_dispatch:
+
+concurrency: cnblogs-crawl
+
+permissions:
+  contents: write
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run crawler
+        env:
+          YUQUE_TOKEN: ${{ secrets.YUQUE_TOKEN }}
+          YUQUE_COOKIE: ${{ secrets.YUQUE_COOKIE }}
+          YUQUE_CTOKEN: ${{ secrets.YUQUE_CTOKEN }}
+          DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
+          YUQUE_BOOK: ${{ secrets.YUQUE_BOOK }}
+        run: python crawl.py
+
+      - name: Commit state.json (去重状态 + 保活)
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: 'crawl: update state.json'
+          file_pattern: 'state.json'

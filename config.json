@@ -1,0 +1,8 @@
+{
+  "_comment": "目标源和知识库暂缺省。feeds 填源、book 填语雀 namespace 即可跑。token/cookie/ctoken 请走环境变量（GitHub Secrets），不要写进本文件。",
+  "feeds": [
+  ],
+  "book": "",
+  "max_text_bytes": 204800,
+  "request_interval": 1.0
+}
