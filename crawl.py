@@ -31,6 +31,7 @@ from bs4 import BeautifulSoup
 API_BASE = "https://www.yuque.com/api/v2"
 UPLOAD_URL = "https://www.yuque.com/api/upload/attach"
 YUQUE_USER_ID = 25689388  # 语雀 user_id，图片上传 attachable_id 用
+API_MIN_INTERVAL = 0.5     # 语雀 API 最小请求间隔（秒），防限流
 
 CONFIG_PATH = os.environ.get("CONFIG_PATH", "config.json")
 STATE_PATH = "state.json"
@@ -100,6 +101,48 @@ def notify_dingtalk(text):
         log("钉钉告警已发送")
     except Exception as e:
         log(f"钉钉告警发送失败: {e}")
+
+
+# ---------------------------------------------------------------------------
+# 语雀请求：限流 + 429/5xx 退避重试
+# ---------------------------------------------------------------------------
+_last_api_call = 0.0
+
+
+def _throttle():
+    """保证语雀 API 请求间隔 ≥ API_MIN_INTERVAL"""
+    global _last_api_call
+    now = time.time()
+    wait = API_MIN_INTERVAL - (now - _last_api_call)
+    if wait > 0:
+        time.sleep(wait)
+    _last_api_call = time.time()
+
+
+def api_request(method, url, token=None, json_body=None, retries=4):
+    """带限流 + 退避重试的语雀请求；返回最后一次响应"""
+    headers = {"User-Agent": USER_AGENTS[0]}
+    if token:
+        headers["X-Auth-Token"] = token
+    if json_body is not None:
+        headers["Content-Type"] = "application/json"
+    r = None
+    for attempt in range(retries):
+        _throttle()
+        r = requests.request(method, url, headers=headers, json=json_body, timeout=30)
+        if r.status_code == 429:
+            ra = r.headers.get("Retry-After", "")
+            wait = int(ra) if ra.isdigit() else min(5 * (attempt + 1), 30)
+            log(f"语雀 429 限流，退避 {wait}s 重试({attempt + 1}/{retries})")
+            time.sleep(wait)
+            continue
+        if r.status_code >= 500:
+            wait = 3 * (attempt + 1)
+            log(f"语雀 {r.status_code} 服务端错误，退避 {wait}s 重试({attempt + 1}/{retries})")
+            time.sleep(wait)
+            continue
+        return r
+    return r
 
 
 # ---------------------------------------------------------------------------
@@ -292,8 +335,8 @@ def extract_title(html):
 # ---------------------------------------------------------------------------
 # 图片处理
 # ---------------------------------------------------------------------------
-def upload_image(image_bytes, ext, cookie, ctoken):
-    """上传图片到语雀 CDN，返回 cdn URL；失败返回 None"""
+def upload_image(image_bytes, ext, cookie, ctoken, retries=3):
+    """上传图片到语雀 CDN，返回 cdn URL；429 退避重试，其他失败返回 None"""
     params = {
         "attachable_type": "User",
         "attachable_id": YUQUE_USER_ID,
@@ -307,16 +350,26 @@ def upload_image(image_bytes, ext, cookie, ctoken):
     }
     mime = f"image/{ext}" if ext != "jpg" else "image/jpeg"
     files = {"file": (f"img.{ext}", image_bytes, mime)}
-    try:
-        r = requests.post(UPLOAD_URL, params=params, headers=headers, files=files, timeout=30)
-        if r.status_code == 200:
-            data = r.json().get("data", {})
-            url = data.get("url")
-            if url:
-                return url
-        log(f"图片上传失败 HTTP {r.status_code}: {r.text[:200]}")
-    except Exception as e:
-        log(f"图片上传异常: {e}")
+    for attempt in range(retries):
+        _throttle()
+        try:
+            r = requests.post(UPLOAD_URL, params=params, headers=headers, files=files, timeout=30)
+            if r.status_code == 429:
+                ra = r.headers.get("Retry-After", "")
+                wait = int(ra) if ra.isdigit() else min(5 * (attempt + 1), 30)
+                log(f"图片上传 429 限流，退避 {wait}s 重试({attempt + 1}/{retries})")
+                time.sleep(wait)
+                continue
+            if r.status_code == 200:
+                data = r.json().get("data", {})
+                url = data.get("url")
+                if url:
+                    return url
+            log(f"图片上传失败 HTTP {r.status_code}: {r.text[:200]}")
+            return None
+        except Exception as e:
+            log(f"图片上传异常: {e}")
+            return None
     return None
 
 
@@ -394,31 +447,26 @@ def split_markdown(markdown, max_bytes):
 # ---------------------------------------------------------------------------
 def create_doc(book, title, slug, body, token):
     """创建文档，返回 doc_id"""
-    r = requests.post(
-        f"{API_BASE}/repos/{book}/docs",
-        headers={"X-Auth-Token": token, "Content-Type": "application/json"},
-        json={"title": title, "slug": slug, "body": body, "format": "markdown"},
-        timeout=30,
-    )
-    if r.status_code in (200, 201):
+    r = api_request("POST", f"{API_BASE}/repos/{book}/docs", token=token,
+                    json_body={"title": title, "slug": slug, "body": body, "format": "markdown"})
+    if r is not None and r.status_code in (200, 201):
         return r.json()["data"]["id"]
-    raise RuntimeError(f"建文档失败 HTTP {r.status_code}: {r.text[:300]}")
+    code = getattr(r, "status_code", "?")
+    text = getattr(r, "text", "")[:300]
+    raise RuntimeError(f"建文档失败 HTTP {code}: {text}")
 
 
 def get_toc(book, token):
-    r = requests.get(f"{API_BASE}/repos/{book}/toc", headers={"X-Auth-Token": token}, timeout=20)
-    r.raise_for_status()
+    r = api_request("GET", f"{API_BASE}/repos/{book}/toc", token=token)
+    if r.status_code != 200:
+        raise RuntimeError(f"获取目录失败 HTTP {r.status_code}: {r.text[:200]}")
     return r.json().get("data", [])
 
 
 def update_toc(book, token, payload):
-    r = requests.put(
-        f"{API_BASE}/repos/{book}/toc",
-        headers={"X-Auth-Token": token, "Content-Type": "application/json"},
-        json=payload,
-        timeout=20,
-    )
-    r.raise_for_status()
+    r = api_request("PUT", f"{API_BASE}/repos/{book}/toc", token=token, json_body=payload)
+    if r.status_code != 200:
+        raise RuntimeError(f"更新目录失败 HTTP {r.status_code}: {r.text[:200]}")
     return r.json().get("data", [])
 
 
