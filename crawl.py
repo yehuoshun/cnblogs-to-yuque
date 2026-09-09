@@ -484,9 +484,20 @@ def update_toc(book, token, payload):
     return r.json().get("data", [])
 
 
+_toc_cache = {"book": None, "nodes": None}
+
+
+def get_cached_toc(book, token):
+    """获取目录（本次运行内缓存，避免每次挂载都拉全量 TOC）"""
+    if _toc_cache["book"] != book or _toc_cache["nodes"] is None:
+        _toc_cache["book"] = book
+        _toc_cache["nodes"] = get_toc(book, token)
+    return _toc_cache["nodes"]
+
+
 def get_or_create_author_node(book, author, token):
     """找到或创建「作者」目录节点，返回其 uuid"""
-    toc = get_toc(book, token)
+    toc = get_cached_toc(book, token)
     for node in toc:
         if node.get("type") == "TITLE" and node.get("title") == author:
             return node["uuid"]
@@ -497,6 +508,7 @@ def get_or_create_author_node(book, author, token):
         "type": "TITLE",
         "title": author,
     })
+    _toc_cache["nodes"] = new_toc
     for node in new_toc:
         if node.get("type") == "TITLE" and node.get("title") == author:
             return node["uuid"]
@@ -504,13 +516,14 @@ def get_or_create_author_node(book, author, token):
 
 
 def attach_to_author(book, author_uuid, doc_id, token):
-    update_toc(book, token, {
+    new_toc = update_toc(book, token, {
         "action": "appendNode",
         "action_mode": "child",
         "type": "DOC",
         "doc_ids": [doc_id],
         "target_uuid": author_uuid,
     })
+    _toc_cache["nodes"] = new_toc
 
 
 # ---------------------------------------------------------------------------
