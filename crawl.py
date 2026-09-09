@@ -119,6 +119,20 @@ def _throttle():
     _last_api_call = time.time()
 
 
+def _handle_429(r, attempt, retries, label="语雀"):
+    """429 区分两种：瞬时限流（QPS）短退避；小时配额耗尽（X-RateLimit-Remaining=0）等整点"""
+    remaining = r.headers.get("X-RateLimit-Remaining", "")
+    if remaining == "0":
+        now = time.localtime()
+        secs = 3600 - (now.tm_min * 60 + now.tm_sec)
+        log(f"{label} 429：小时配额耗尽，等 {secs}s 到整点重置")
+        time.sleep(secs)
+        return
+    wait = attempt + 1  # 1s / 2s / 3s
+    log(f"{label} 429 瞬时限流，退避 {wait}s 重试({attempt + 1}/{retries})")
+    time.sleep(wait)
+
+
 def api_request(method, url, token=None, json_body=None, retries=4):
     """带限流 + 退避重试的语雀请求；返回最后一次响应"""
     headers = {"User-Agent": USER_AGENTS[0]}
@@ -131,10 +145,7 @@ def api_request(method, url, token=None, json_body=None, retries=4):
         _throttle()
         r = requests.request(method, url, headers=headers, json=json_body, timeout=30)
         if r.status_code == 429:
-            ra = r.headers.get("Retry-After", "")
-            wait = int(ra) if ra.isdigit() else min(5 * (attempt + 1), 30)
-            log(f"语雀 429 限流，退避 {wait}s 重试({attempt + 1}/{retries})")
-            time.sleep(wait)
+            _handle_429(r, attempt, retries)
             continue
         if r.status_code >= 500:
             wait = 3 * (attempt + 1)
@@ -355,10 +366,7 @@ def upload_image(image_bytes, ext, cookie, ctoken, retries=3):
         try:
             r = requests.post(UPLOAD_URL, params=params, headers=headers, files=files, timeout=30)
             if r.status_code == 429:
-                ra = r.headers.get("Retry-After", "")
-                wait = int(ra) if ra.isdigit() else min(5 * (attempt + 1), 30)
-                log(f"图片上传 429 限流，退避 {wait}s 重试({attempt + 1}/{retries})")
-                time.sleep(wait)
+                _handle_429(r, attempt, retries, label="图片上传")
                 continue
             if r.status_code == 200:
                 data = r.json().get("data", {})
