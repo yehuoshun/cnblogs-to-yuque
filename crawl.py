@@ -409,7 +409,8 @@ def upload_image(image_bytes, ext, cookie, ctoken, retries=3):
 
 
 def process_images(markdown, cookie, ctoken):
-    """把 markdown 里的外链图片下载+上传到语雀 CDN，替换 URL"""
+    """把 markdown 里的外链图片下载+上传到语雀 CDN，替换 URL；
+    失败降级为文字占位（博客园 CDN 防盗链拒绝语雀 Referer，保留外链必裂图）"""
     def repl(m):
         alt = m.group(1)
         src = m.group(2)
@@ -423,10 +424,12 @@ def process_images(markdown, cookie, ctoken):
             new_url = upload_image(r.content, ext, cookie, ctoken)
             if new_url:
                 return f"![{alt}]({new_url})"
-            log(f"图片降级用原 URL: {src[:80]}")
+            log(f"图片上传失败，降级占位: {src[:80]}")
         except Exception as e:
-            log(f"图片下载失败，降级原 URL: {src[:80]} ({e})")
-        return m.group(0)  # 失败降级：保留博客园原 URL
+            log(f"图片下载失败，降级占位: {src[:80]} ({e})")
+        # 失败降级：文字占位（保留外链在语雀页面必 403 裂图）
+        alt = (alt or src[:40]).replace("[", "(").replace("]", ")").strip() or "图片"
+        return f"[图片: {alt}（上传失败，原图见文末原文链接）]"
 
     return re.sub(r"!\[([^\]]*)\]\(([^)]+)\)", repl, markdown)
 
