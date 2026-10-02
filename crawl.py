@@ -32,6 +32,8 @@ UPLOAD_URL = "https://www.yuque.com/api/upload/attach"
 YUQUE_USER_ID = 25689388  # 语雀 user_id，图片上传 attachable_id 用
 API_MIN_INTERVAL = 0.5     # 语雀 API 最小请求间隔（秒），防限流
 
+_cookie_invalid = False     # 图片上传鉴权失败（cookie 失效）标记，main 末尾据此告警
+
 CONFIG_PATH = os.environ.get("CONFIG_PATH", "config.json")
 STATE_PATH = "state.json"
 
@@ -378,6 +380,12 @@ def upload_image(image_bytes, ext, cookie, ctoken, retries=3):
                 url = data.get("url")
                 if url:
                     return url
+            if r.status_code in (401, 403):
+                # 登录态失效：置标记供 main 末尾告警（降级原 URL，本轮照常跑）
+                global _cookie_invalid
+                _cookie_invalid = True
+                log(f"图片上传鉴权失败 HTTP {r.status_code}（cookie 可能已失效），降级原 URL")
+                return None
             log(f"图片上传失败 HTTP {r.status_code}: {r.text[:200]}")
             return None
         except Exception as e:
@@ -556,7 +564,6 @@ def main():
     author_cache = {}  # 作者目录 uuid 缓存，避免每篇重复 get_toc
     new_count = 0
     fail_count = 0
-    cookie_ok = True
     empty_body_streak = 0
 
     for feed_cfg in feeds:
@@ -616,9 +623,6 @@ def main():
             except Exception as e:
                 fail_count += 1
                 log(f"  ❌ 失败: {url} ({e})")
-                # cookie 失效探测：上传阶段身份错误
-                if "invalid" in str(e).lower() or "401" in str(e) or "403" in str(e):
-                    cookie_ok = False
 
     # 每次跑都更新 last_run，保证 state.json 有 diff → commit → 保活 schedule
     state["last_run"] = int(time.time())
@@ -627,8 +631,8 @@ def main():
     log(summary)
     if fail_count > 0:
         notify_dingtalk(f"[cnblogs-to-yuque] {summary}")
-    if not cookie_ok:
-        notify_dingtalk("[cnblogs-to-yuque] ⚠️ 语雀 cookie 可能已失效，请更新 YUQUE_COOKIE/YUQUE_CTOKEN secret")
+    if _cookie_invalid:
+        notify_dingtalk("[cnblogs-to-yuque] ⚠️ 语雀 cookie 可能已失效，图片已降级外链，请更新 YUQUE_COOKIE/YUQUE_CTOKEN secret")
 
 
 if __name__ == "__main__":
