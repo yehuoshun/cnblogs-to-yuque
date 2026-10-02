@@ -535,6 +535,43 @@ def attach_to_author(book, author_uuid, doc_id, token):
     _toc_cache["nodes"] = new_toc
 
 
+def publish_chunks(chunks, title, author, url, book, token, state, author_cache):
+    """建文档 + 挂作者目录。
+
+    防孤儿文档：create 成功但挂载失败时，把已建 doc_id 记入
+    state['pending_attach'][url]['chunks'][idx]，下次运行续挂不重建；
+    已挂成功的 chunk 记录 attached=True，续挂时跳过重建。
+    全部成功时清理 pending；任一步失败立即落盘并抛异常（外层计数）。
+    """
+    pending_attach = state.setdefault("pending_attach", {})
+    chunk_state = pending_attach.get(url, {}).get("chunks", {})
+
+    for idx, chunk in enumerate(chunks):
+        doc_title = title if len(chunks) == 1 else f"{title}-{idx + 1}"
+        cs = chunk_state.get(str(idx))
+        if cs and cs.get("attached"):
+            log(f"  已挂载跳过: #{cs['doc_id']}《{doc_title}》")
+            continue
+        if cs:
+            doc_id = cs["doc_id"]
+            log(f"  复用待挂载文档 #{doc_id}《{doc_title}》")
+        else:
+            doc_id = create_doc(book, doc_title, chunk, token)
+        try:
+            if author not in author_cache:
+                author_cache[author] = get_or_create_author_node(book, author, token)
+            attach_to_author(book, author_cache[author], doc_id, token)
+            chunk_state[str(idx)] = {"doc_id": doc_id, "attached": True}
+            log(f"  ✅ 建文档 #{doc_id} 《{doc_title}》")
+        except Exception:
+            chunk_state[str(idx)] = {"doc_id": doc_id, "attached": False}
+            pending_attach[url] = {"author": author, "chunks": chunk_state}
+            save_state(state)  # 立即落盘，进程中断也不丢
+            raise
+
+    pending_attach.pop(url, None)
+
+
 # ---------------------------------------------------------------------------
 # 主流程
 # ---------------------------------------------------------------------------
@@ -609,13 +646,8 @@ def main():
                 chunks = split_markdown(markdown, max_bytes)
 
                 # 5. 建文档 + 挂目录（slug 交给语雀自动生成，去重靠 state.json URL key）
-                for idx, chunk in enumerate(chunks):
-                    doc_title = title if len(chunks) == 1 else f"{title}-{idx + 1}"
-                    doc_id = create_doc(book, doc_title, chunk, token)
-                    if author not in author_cache:
-                        author_cache[author] = get_or_create_author_node(book, author, token)
-                    attach_to_author(book, author_cache[author], doc_id, token)
-                    log(f"  ✅ 建文档 #{doc_id} 《{doc_title}》")
+                #    挂载失败走 pending_attach 续挂，防孤儿文档
+                publish_chunks(chunks, title, author, url, book, token, state, author_cache)
 
                 # 6. 标记已处理（全部成功才标记）
                 processed[url] = {"title": title, "author": author, "ts": int(time.time())}
