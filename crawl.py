@@ -111,6 +111,13 @@ def notify_dingtalk(text):
 _last_api_call = 0.0
 
 
+class QuotaExhaustedError(Exception):
+    """语雀小时配额耗尽且距整点重置超过等待上限，提前结束本轮"""
+
+
+MAX_QUOTA_WAIT = 600  # 配额耗尽时最多等整点重置的秒数，超过则放弃本轮
+
+
 def _throttle():
     """保证语雀 API 请求间隔 ≥ API_MIN_INTERVAL"""
     global _last_api_call
@@ -122,14 +129,17 @@ def _throttle():
 
 
 def _handle_429(r, attempt, retries, label="语雀"):
-    """429 区分两种：瞬时限流（QPS）短退避；小时配额耗尽（X-RateLimit-Remaining=0）等整点"""
+    """429 区分两种：瞬时限流（QPS）短退避；小时配额耗尽（X-RateLimit-Remaining=0）等整点，
+    但超过 MAX_QUOTA_WAIT 秒则抛 QuotaExhaustedError 提前结束本轮（避免拖死 60min workflow）"""
     remaining = r.headers.get("X-RateLimit-Remaining", "")
     if remaining == "0":
         now = time.localtime()
         secs = 3600 - (now.tm_min * 60 + now.tm_sec)
-        log(f"{label} 429：小时配额耗尽，等 {secs}s 到整点重置")
-        time.sleep(secs)
-        return
+        if secs <= MAX_QUOTA_WAIT:
+            log(f"{label} 429：小时配额耗尽，等 {secs}s 到整点重置")
+            time.sleep(secs)
+            return
+        raise QuotaExhaustedError(f"{label} 小时配额耗尽，距整点重置 {secs}s 超等待上限 {MAX_QUOTA_WAIT}s")
     wait = attempt + 1  # 1s / 2s / 3s
     log(f"{label} 429 瞬时限流，退避 {wait}s 重试({attempt + 1}/{retries})")
     time.sleep(wait)
@@ -656,6 +666,13 @@ def main():
                 # 6. 标记已处理（全部成功才标记）
                 processed[url] = {"title": title, "author": author, "ts": int(time.time())}
                 new_count += 1
+            except QuotaExhaustedError as e:
+                # 配额耗尽且等不起：保存 state 后干净退出（exit 0，下次续跑）
+                log(f"提前结束本轮: {e}")
+                state["last_run"] = int(time.time())
+                save_state(state)
+                notify_dingtalk(f"[cnblogs-to-yuque] ⚠️ {e}，本轮提前结束（state 已保存，下次续跑）")
+                sys.exit(0)
             except Exception as e:
                 fail_count += 1
                 log(f"  ❌ 失败: {url} ({e})")
