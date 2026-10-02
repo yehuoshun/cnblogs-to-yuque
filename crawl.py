@@ -38,12 +38,7 @@ CONFIG_PATH = os.environ.get("CONFIG_PATH", "config.json")
 STATE_PATH = "state.json"
 
 FEED_URLS = {
-    "sitehome": "https://feed.cnblogs.com/blog/sitehome/rss",       # 首页最新
-    "picked": "https://feed.cnblogs.com/blog/sitehome/picked",      # 编辑推荐
-    "48h": "https://feed.cnblogs.com/blog/sitehome/48h",            # 48小时阅读排行
-    "10d": "https://feed.cnblogs.com/blog/sitehome/10d",            # 10天推荐排行
-    "user": "https://feed.cnblogs.com/blog/u/{param}/rss",          # 指定博主
-    "category": "https://feed.cnblogs.com/blog/category/{param}/rss",  # 分类
+    "sitehome": "https://feed.cnblogs.com/blog/sitehome/rss",  # 首页最新（博客园 feed 服务当前唯一可用源，其余路径均 500）
 }
 
 USER_AGENTS = [
@@ -187,7 +182,7 @@ def fetch_text(url, timeout=20, referer=None, retries=3):
 # RSS
 # ---------------------------------------------------------------------------
 def fetch_articles(feed_cfg):
-    """从 RSS 返回文章列表 [{url, title, author}]"""
+    """从 RSS 返回文章列表 [{url, title, author}]；抓取失败/为空时钉钉告警，不静默"""
     ftype = feed_cfg.get("type")
     param = feed_cfg.get("param", "")
     if ftype not in FEED_URLS:
@@ -196,7 +191,14 @@ def fetch_articles(feed_cfg):
         else FEED_URLS[ftype]
 
     log(f"抓取 RSS: {url}")
-    feed = feedparser.parse(url)
+    # 显式请求：feedparser.parse 对非 200 静默返回空列表，会掩盖 feed 服务故障
+    try:
+        r = fetch_text(url, timeout=20)
+    except Exception as e:
+        notify_dingtalk(f"[cnblogs-to-yuque] ⚠️ RSS 抓取失败: {url} ({e})")
+        log(f"RSS 抓取失败: {url} ({e})")
+        return []
+    feed = feedparser.parse(r.content)
     articles = []
     for entry in feed.entries:
         link = entry.get("link") or entry.get("id") or ""
@@ -207,6 +209,8 @@ def fetch_articles(feed_cfg):
         if not link:
             continue
         articles.append({"url": link, "title": title, "author": author})
+    if not articles:
+        notify_dingtalk(f"[cnblogs-to-yuque] ⚠️ RSS 解析结果为空: {url}")
     log(f"RSS 共 {len(articles)} 篇")
     return articles
 

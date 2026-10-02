@@ -21,20 +21,14 @@ RSS 吐文章 URL → 抓详情页全文(#cnblogs_post_body) → HTML→markdown
 ```json
 {
   "feeds": [
-    { "type": "sitehome" },
-    { "type": "user", "param": "某博主用户名" }
+    { "type": "sitehome" }
   ]
 }
 ```
 
 | type | 说明 | param |
 |---|---|---|
-| `sitehome` | 首页最新 | 无 |
-| `picked` | 编辑推荐 | 无 |
-| `48h` | 48 小时阅读排行 | 无 |
-| `10d` | 10 天推荐排行 | 无 |
-| `user` | 指定博主 | 用户名 |
-| `category` | 分类 | 分类名 |
+| `sitehome` | 首页最新（博客园 feed 服务当前唯一可用源，其他路径均 500） | 无 |
 
 ### 2. 目标知识库
 
